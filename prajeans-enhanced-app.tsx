@@ -9,7 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import LeafletMapWrapper from "./components/leaflet-map-wrapper"
 import EnhancedAudioPlayer from "./components/enhanced-audio-player"
-import { parseCSVData, SAMPLE_CSV_DATA, type ComplaintData } from "./lib/csv-parser"
+import { parseCSVData, type ComplaintData } from "./lib/csv-parser"
 
 export default function PrajeansEnhancedApp() {
   const [complaints, setComplaints] = useState<ComplaintData[]>([])
@@ -25,17 +25,15 @@ export default function PrajeansEnhancedApp() {
   useEffect(() => {
     const loadData = async () => {
       try {
-        // In production, load from actual CSV file
-        // const response = await fetch('/data/complaints.csv');
-        // const csvContent = await response.text();
-
-        // For demo, use sample data
-        const parsedData = parseCSVData(SAMPLE_CSV_DATA)
+        // Load from actual CSV file
+        const response = await fetch('/data/data.csv');
+        const csvContent = await response.text();
+        const parsedData = parseCSVData(csvContent)
         setComplaints(parsedData)
       } catch (error) {
         console.error("Failed to load complaint data:", error)
-        // Fallback to sample data
-        setComplaints(parseCSVData(SAMPLE_CSV_DATA))
+        // Set empty array if loading fails
+        setComplaints([])
       }
     }
 

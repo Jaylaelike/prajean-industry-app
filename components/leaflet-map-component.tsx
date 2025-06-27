@@ -64,14 +64,25 @@ const createLocationIcon = () => {
   return L.divIcon({
     html: `
       <div class="relative cursor-pointer transform transition-all duration-300 hover:scale-110">
-        <div class="w-8 h-8 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full flex items-center justify-center text-white font-bold shadow-lg border-2 border-white">
-          <span class="text-xs">🎵</span>  
+        <div class="w-10 h-10 bg-gradient-to-r from-gray-600 to-gray-800 rounded-lg flex items-center justify-center text-white font-bold shadow-lg border-2 border-white">
+          <span class="text-lg">🏭</span>  
+        </div>
+        <div class="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full animate-pulse">
+          <div class="absolute inset-0.5 bg-white rounded-full animate-ping opacity-75"></div>
+        </div>
+        <!-- Factory smoke animation -->
+        <div class="absolute -top-4 left-1/2 transform -translate-x-1/2">
+          <div class="flex space-x-1">
+            <div class="w-1 h-3 bg-gray-400 opacity-60 rounded-full animate-pulse" style="animation-delay: 0s"></div>
+            <div class="w-1 h-4 bg-gray-500 opacity-50 rounded-full animate-pulse" style="animation-delay: 0.5s"></div>
+            <div class="w-1 h-2 bg-gray-400 opacity-40 rounded-full animate-pulse" style="animation-delay: 1s"></div>
+          </div>
         </div>
       </div>
     `,
     className: 'location-marker',
-    iconSize: [32, 32],
-    iconAnchor: [16, 16],
+    iconSize: [40, 40],
+    iconAnchor: [20, 20],
   })
 }
 
@@ -158,9 +169,9 @@ export default function LeafletMapComponent({
   onZoomChange,
   className = "",
 }: LeafletMapComponentProps) {
-  const [currentZoom, setCurrentZoom] = useState(10)
+  const [currentZoom, setCurrentZoom] = useState(9)
   const [audioEnabled, setAudioEnabled] = useState(true)
-  const [audioVolume, setAudioVolume] = useState(0.5)
+  const [audioVolume, setAudioVolume] = useState(0.1)
   const [locationData, setLocationData] = useState<LocationData[]>([])
   const [selectedLocation, setSelectedLocation] = useState<LocationData | null>(null)
   const [isSidebarOpen, setIsSidebarOpen] = useState(false)
@@ -179,6 +190,18 @@ export default function LeafletMapComponent({
     loadData()
   }, [])
 
+  // Calculate optimized volume based on zoom level
+  const calculateOptimizedVolume = (baseVolume: number, zoomLevel: number): number => {
+    // Optimized volume curve: more gradual at low zoom, more responsive at high zoom
+    const minZoom = 6
+    const maxZoom = 18
+    const normalizedZoom = Math.max(0, Math.min(1, (zoomLevel - minZoom) / (maxZoom - minZoom)))
+    
+    // Use exponential curve for more natural volume scaling
+    const volumeMultiplier = Math.pow(normalizedZoom, 0.7) * 0.9 + 0.1 // Range: 0.1 to 1.0
+    return Math.min(1.0, baseVolume * volumeMultiplier)
+  }
+
   // Handle location-specific audio playback
   const handleLocationAudioPlay = async (audioUrl: string) => {
     if (!audioUrl || !audioEnabled) return
@@ -194,7 +217,7 @@ export default function LeafletMapComponent({
 
       // Create new audio element
       audioRef.current = new Audio(audioUrl)
-      audioRef.current.volume = audioVolume * (currentZoom / 18) // Scale volume with zoom
+      audioRef.current.volume = calculateOptimizedVolume(audioVolume, currentZoom)
       
       audioRef.current.onended = () => {
         setIsLocationAudioPlaying(false)
@@ -217,14 +240,14 @@ export default function LeafletMapComponent({
   const playClickSound = () => {
     if (!audioEnabled) return
     const clickAudio = new Audio('/audio/click.mp3')
-    clickAudio.volume = audioVolume * 0.5
+    clickAudio.volume = calculateOptimizedVolume(audioVolume, currentZoom) * 0.6
     clickAudio.play().catch(console.error)
   }
 
   const playZoomSound = () => {
     if (!audioEnabled) return
     const zoomAudio = new Audio('/audio/zoom.mp3')
-    zoomAudio.volume = audioVolume * 0.3
+    zoomAudio.volume = calculateOptimizedVolume(audioVolume, currentZoom) * 0.4
     zoomAudio.play().catch(console.error)
   }
 
@@ -258,9 +281,9 @@ export default function LeafletMapComponent({
     onZoomChange(zoom)
     playZoomSound()
     
-    // Update volume for currently playing audio based on zoom
+    // Update volume for currently playing audio based on optimized zoom calculation
     if (audioRef.current && isLocationAudioPlaying) {
-      audioRef.current.volume = audioVolume * (zoom / 18)
+      audioRef.current.volume = calculateOptimizedVolume(audioVolume, zoom)
     }
     
     // Update map zoom if map exists
@@ -272,9 +295,9 @@ export default function LeafletMapComponent({
   // Handle fit bounds
   const handleFitBounds = () => {
     if (mapRef.current) {
-      mapRef.current.setView([13.7563, 100.5018], 10)
-      setCurrentZoom(10)
-      onZoomChange(10)
+      mapRef.current.setView([14.0228637, 101.3021549], 9)
+      setCurrentZoom(9)
+      onZoomChange(9)
     }
   }
 
@@ -283,8 +306,8 @@ export default function LeafletMapComponent({
     mapRef.current = map
   }
 
-  // Thailand center coordinates
-  const thailandCenter: [number, number] = [13.7563, 100.5018]
+  // Prachinburi province center coordinates
+  const thailandCenter: [number, number] = [14.0228637, 101.3021549]
 
   return (
     <div className={`relative ${className}`}>
@@ -296,7 +319,7 @@ export default function LeafletMapComponent({
       >
         <MapContainer
           center={thailandCenter}
-          zoom={10}
+          zoom={9}
           className="w-full h-full"
           zoomControl={false}
         >
@@ -354,13 +377,20 @@ export default function LeafletMapComponent({
             >
               <Popup>
                 <div className="p-4 max-w-xs">
-                  <h3 className="font-bold text-lg mb-2">{location.title}</h3>
+                  <h3 className="font-bold text-lg mb-2 flex items-center">
+                    <span className="mr-2">🏭</span>
+                    {location.title}
+                  </h3>
                   <p className="text-sm text-gray-600 mb-2">{location.description}</p>
+                  <div className="text-xs text-gray-500 mb-3">
+                    <strong>Factory:</strong> {location.factoryName}
+                  </div>
                   <button
                     onClick={() => handleLocationAudioPlay(location.audioUrl)}
-                    className="text-xs bg-purple-500 hover:bg-purple-600 text-white px-2 py-1 rounded"
+                    className="w-full text-xs bg-gray-700 hover:bg-gray-800 text-white px-3 py-2 rounded-lg flex items-center justify-center space-x-2 transition-colors"
                   >
-                    🎵 Play Audio
+                    <span>🎧</span>
+                    <span>Play Environmental Audio</span>
                   </button>
                 </div>
               </Popup>
@@ -397,9 +427,9 @@ export default function LeafletMapComponent({
           </button>
           <div className="text-center">
             <div className="text-xs font-semibold text-gray-700">
-              {Math.round(audioVolume * (currentZoom / 18) * 100)}%
+              {Math.round(calculateOptimizedVolume(audioVolume, currentZoom) * 100)}%
             </div>
-            <div className="text-xs text-gray-500">Adj. Vol</div>
+            <div className="text-xs text-gray-500">Effective Vol</div>
           </div>
         </div>
         {/* Sidebar toggle for mobile */}
@@ -448,11 +478,11 @@ export default function LeafletMapComponent({
             </span>
           </div>
           <div className="flex items-center justify-between text-xs pt-2 border-t border-gray-200">
-            <span className="text-purple-600 font-medium flex items-center">
-              <span className="mr-1">📍</span>
-              Audio Locations
+            <span className="text-gray-700 font-medium flex items-center">
+              <span className="mr-1">🏭</span>
+              Factory Locations
             </span>
-            <span className="bg-purple-100 text-purple-800 px-2 py-1 rounded-full font-bold">
+            <span className="bg-gray-100 text-gray-800 px-2 py-1 rounded-full font-bold">
               {locationData.length}
             </span>
           </div>
