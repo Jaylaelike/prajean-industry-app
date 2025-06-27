@@ -179,6 +179,9 @@ export default function LeafletMapComponent({
   const [autoPlayTriggered, setAutoPlayTriggered] = useState(false)
   const [autoLoopMode, setAutoLoopMode] = useState(false)
   const [currentLoopIndex, setCurrentLoopIndex] = useState(0)
+  const [searchQuery, setSearchQuery] = useState("")
+  const [searchResults, setSearchResults] = useState<LocationData[]>([])
+  const [showSearchResults, setShowSearchResults] = useState(false)
   const csvDataLoaderRef = useRef<CSVDataLoader | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const mapRef = useRef<L.Map | null>(null)
@@ -205,6 +208,16 @@ export default function LeafletMapComponent({
       }
     }
   }, [])
+
+  // Effect to restart auto loop when location data is loaded
+  useEffect(() => {
+    if (autoLoopMode && locationData.length > 0) {
+      console.log('Location data loaded, restarting auto loop with', locationData.length, 'locations')
+      // Regenerate random order with new data
+      randomOrderRef.current = generateRandomOrder()
+      setCurrentLoopIndex(0)
+    }
+  }, [locationData, autoLoopMode])
 
   // Calculate optimized volume based on zoom level
   const calculateOptimizedVolume = (baseVolume: number, zoomLevel: number): number => {
@@ -252,7 +265,9 @@ export default function LeafletMapComponent({
 
   // Generate random order for loop mode
   const generateRandomOrder = () => {
-    const indices = Array.from({ length: locationData.length }, (_, i) => i)
+    // Always use locationData as primary source (loaded from CSV)
+    const dataToUse = locationData.length > 0 ? locationData : complaints
+    const indices = Array.from({ length: dataToUse.length }, (_, i) => i)
     for (let i = indices.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1))
       ;[indices[i], indices[j]] = [indices[j], indices[i]]
@@ -272,41 +287,79 @@ export default function LeafletMapComponent({
 
   // Handle single loop iteration
   const executeLoopIteration = () => {
-    // Use complaints data instead of locationData for better compatibility
-    const dataToUse = complaints.length > 0 ? complaints : locationData
+    // Always use locationData as primary source (loaded from CSV)
+    const dataToUse = locationData.length > 0 ? locationData : complaints
     
     console.log('executeLoopIteration called', {
       autoLoopMode,
+      locationDataLength: locationData.length,
+      complaintsLength: complaints.length,
       dataLength: dataToUse.length,
       mapExists: !!mapRef.current,
       currentLoopIndex,
       randomOrder: randomOrderRef.current
     })
     
-    if (!autoLoopMode || dataToUse.length === 0 || !mapRef.current) {
-      console.log('executeLoopIteration early return')
+    if (!autoLoopMode || dataToUse.length === 0 || !mapRef.current || randomOrderRef.current.length === 0) {
+      console.log('executeLoopIteration early return - missing requirements')
+      return
+    }
+
+    // Ensure currentLoopIndex is within bounds
+    if (currentLoopIndex >= randomOrderRef.current.length) {
+      console.log('currentLoopIndex out of bounds, resetting to 0')
+      setCurrentLoopIndex(0)
       return
     }
 
     // Get current location from random order
     const locationIndex = randomOrderRef.current[currentLoopIndex]
+    if (locationIndex >= dataToUse.length) {
+      console.log('locationIndex out of bounds, regenerating random order')
+      randomOrderRef.current = generateRandomOrder()
+      setCurrentLoopIndex(0)
+      return
+    }
+    
     const location = dataToUse[locationIndex]
     
     console.log('Processing location:', location)
     
-    if (location) {
+    if (location && location.latitude && location.longitude) {
       // Fly to location
       console.log('Flying to location:', location.latitude, location.longitude)
       flyToLocation(location, 16) // Zoom level 16 for good detail
       
-      // Update selected location and show sidebar
-      setSelectedLocation(location)
+      // Update selected location and show sidebar - ensure compatibility with both data types
+      const locationForSidebar: LocationData = {
+        ...location,
+        // Ensure all required properties exist and proper types
+        id: String(location.id || locationIndex),
+        title: location.title || location.factoryName || 'Unknown Location',
+        description: location.description || 'Environmental complaint location',
+        factoryName: location.factoryName || location.title || 'Factory',
+        audioUrl: location.audioUrl || '',
+        latitude: location.latitude,
+        longitude: location.longitude,
+        category: location.category || 'other',
+        severity: location.severity || 'medium',
+        status: location.status || 'pending',
+        reportedBy: location.reportedBy || '',
+        reportedDate: location.reportedDate || '',
+        contactPhone: location.contactPhone || '',
+        contactEmail: location.contactEmail || '',
+        affectedResidents: location.affectedResidents || 0,
+        evidence: location.evidence || '',
+        tags: location.tags || ''
+      }
+      
+      setSelectedLocation(locationForSidebar)
       setIsSidebarOpen(true)
       
       // Play audio after a short delay to allow map to fly
-      if (location.audioUrl) {
+      if (location && location.audioUrl) {
         setTimeout(() => {
-          if (autoLoopMode && location.audioUrl) {
+          if (autoLoopMode && location && location.audioUrl) {
             console.log('Playing audio for location:', location.audioUrl)
             handleLocationAudioPlay(location.audioUrl, false) // Use manual volume, not auto-play
           }
@@ -322,25 +375,23 @@ export default function LeafletMapComponent({
       // If we've completed all locations, generate new random order
       if (nextIndex === 0) {
         console.log('Regenerating random order')
-        const indices = Array.from({ length: dataToUse.length }, (_, i) => i)
-        for (let i = indices.length - 1; i > 0; i--) {
-          const j = Math.floor(Math.random() * (i + 1))
-          ;[indices[i], indices[j]] = [indices[j], indices[i]]
-        }
-        randomOrderRef.current = indices
+        randomOrderRef.current = generateRandomOrder()
       }
     } else {
-      console.log('No location found at index:', locationIndex)
+      console.log('Invalid location data at index:', locationIndex, location)
+      // Skip to next location
+      const nextIndex = (currentLoopIndex + 1) % randomOrderRef.current.length
+      setCurrentLoopIndex(nextIndex)
     }
   }
 
   // Start auto-loop mode
   const startAutoLoop = () => {
-    // Use complaints data instead of locationData for better compatibility
-    const dataToUse = complaints.length > 0 ? complaints : locationData
+    // Always use locationData as primary source (loaded from CSV)
+    const dataToUse = locationData.length > 0 ? locationData : complaints
     
     console.log('Starting auto-loop with data:', dataToUse.length, 'items')
-    console.log('Data:', dataToUse)
+    console.log('LocationData:', locationData.length, 'Complaints:', complaints.length)
     
     if (dataToUse.length === 0) {
       console.log('No data available for auto-loop')
@@ -351,18 +402,18 @@ export default function LeafletMapComponent({
     isLoopingRef.current = true
     
     // Generate initial random order based on available data
-    const indices = Array.from({ length: dataToUse.length }, (_, i) => i)
-    for (let i = indices.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1))
-      ;[indices[i], indices[j]] = [indices[j], indices[i]]
-    }
-    randomOrderRef.current = indices
+    randomOrderRef.current = generateRandomOrder()
     setCurrentLoopIndex(0)
     
     console.log('Random order generated:', randomOrderRef.current)
     
-    // Execute first iteration immediately
-    executeLoopIteration()
+    // Execute first iteration after a small delay to ensure state is updated
+    setTimeout(() => {
+      if (isLoopingRef.current) {
+        console.log('Executing first iteration')
+        executeLoopIteration()
+      }
+    }, 500)
     
     // Set up interval for subsequent iterations
     loopIntervalRef.current = setInterval(() => {
@@ -546,6 +597,78 @@ export default function LeafletMapComponent({
     mapRef.current = map
   }
 
+  // Search functionality
+  const handleSearch = (query: string) => {
+    setSearchQuery(query)
+    
+    if (query.trim() === "") {
+      setSearchResults([])
+      setShowSearchResults(false)
+      return
+    }
+
+    // Search through both locationData and complaints
+    const locationResults = locationData.filter(location => 
+      location.factoryName.toLowerCase().includes(query.toLowerCase()) ||
+      location.title.toLowerCase().includes(query.toLowerCase()) ||
+      location.description.toLowerCase().includes(query.toLowerCase())
+    )
+
+    // Convert complaints to LocationData format for unified search results
+    const complaintResults = complaints.filter(complaint => 
+      complaint.factoryName.toLowerCase().includes(query.toLowerCase()) ||
+      complaint.title.toLowerCase().includes(query.toLowerCase()) ||
+      complaint.description.toLowerCase().includes(query.toLowerCase())
+    ).map(complaint => ({
+      id: String(complaint.id), // Convert to string to match LocationData type
+      title: complaint.title,
+      description: complaint.description,
+      factoryName: complaint.factoryName,
+      audioUrl: '',
+      latitude: complaint.latitude,
+      longitude: complaint.longitude,
+      category: complaint.category,
+      severity: complaint.severity,
+      status: complaint.status,
+      reportedBy: complaint.reportedBy,
+      reportedDate: complaint.reportedDate,
+      contactPhone: complaint.contactPhone,
+      contactEmail: complaint.contactEmail,
+      affectedResidents: complaint.affectedResidents,
+      evidence: complaint.evidence,
+      tags: complaint.tags || ''
+    }))
+
+    // Combine results and remove duplicates based on ID and factoryName
+    const allResults = [...locationResults, ...complaintResults]
+    const uniqueResults = allResults.filter((result, index, self) => 
+      index === self.findIndex(r => 
+        r.id === result.id || 
+        (r.factoryName === result.factoryName && r.latitude === result.latitude && r.longitude === result.longitude)
+      )
+    )
+    
+    setSearchResults(uniqueResults)
+    setShowSearchResults(uniqueResults.length > 0)
+  }
+
+  // Fly to selected search result
+  const handleSearchResultSelect = (location: LocationData) => {
+    setShowSearchResults(false)
+    setSearchQuery(location.factoryName)
+    flyToLocation(location, 16)
+    setSelectedLocation(location)
+    setIsSidebarOpen(true)
+    handleLocationAudioPlay(location.audioUrl)
+  }
+
+  // Clear search
+  const handleClearSearch = () => {
+    setSearchQuery("")
+    setSearchResults([])
+    setShowSearchResults(false)
+  }
+
   // Prachinburi province center coordinates
   const thailandCenter: [number, number] = [14.0228637, 101.3021549]
 
@@ -722,7 +845,7 @@ export default function LeafletMapComponent({
           <div className="pt-2 border-t border-gray-200">
             <button
               onClick={toggleAutoLoop}
-              disabled={!audioEnabled || (complaints.length === 0 && locationData.length === 0)}
+              disabled={!audioEnabled || (locationData.length === 0 && complaints.length === 0)}
               className={`w-full flex items-center justify-center space-x-2 py-2 px-3 rounded-lg font-medium text-xs transition-all transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none ${
                 autoLoopMode
                   ? 'bg-gradient-to-r from-orange-500 to-red-500 text-white shadow-lg'
@@ -755,6 +878,62 @@ export default function LeafletMapComponent({
         </div>
       </div>
 
+      {/* Search Component */}
+      <div className={`absolute top-4 left-80 bg-white rounded-xl shadow-2xl border-2 border-green-500 z-[1001] min-w-[280px] max-w-[320px] transition-all duration-300 ${
+        autoLoopMode ? 'opacity-50 pointer-events-none' : ''
+      }`}>
+        <div className="p-4">
+          <div className="text-sm font-bold text-gray-900 mb-3 flex items-center">
+            <span className="text-lg mr-2">🔍</span>
+            Search Complaints
+          </div>
+          <div className="relative">
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => handleSearch(e.target.value)}
+              placeholder="Search complaints, factories..."
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent text-sm"
+              disabled={autoLoopMode}
+            />
+            {searchQuery && (
+              <button
+                onClick={handleClearSearch}
+                className="absolute right-2 top-2 text-gray-400 hover:text-gray-600 text-sm"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+          
+          {/* Search Results Dropdown */}
+          {showSearchResults && (
+            <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto z-[1002]">
+              {searchResults.map((location) => (
+                <button
+                  key={location.id}
+                  onClick={() => handleSearchResultSelect(location)}
+                  className="w-full text-left px-3 py-2 hover:bg-gray-50 border-b border-gray-100 last:border-b-0 focus:outline-none focus:bg-blue-50 text-sm"
+                >
+                  <div className="font-medium text-gray-900 truncate">
+                    {location.factoryName}
+                  </div>
+                  <div className="text-xs text-gray-500 truncate">
+                    {location.title}
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+          
+          {searchQuery && searchResults.length === 0 && showSearchResults === false && (
+            <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg p-3 text-sm text-gray-500 text-center">
+              No complaints found matching "{searchQuery}"
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* Audio Playing Indicator */}
       {(isLocationAudioPlaying || autoLoopMode) && (
         <div className={`absolute bottom-4 left-4 text-white px-6 py-4 rounded-xl shadow-2xl flex items-center space-x-4 animate-pulse border border-white/20 backdrop-blur-sm ${
@@ -781,7 +960,7 @@ export default function LeafletMapComponent({
             </div>
             <div className="text-xs opacity-90">
               {autoLoopMode 
-                ? `Location ${currentLoopIndex + 1}/${complaints.length > 0 ? complaints.length : locationData.length} • Next in ${15}s`
+                ? `Location ${currentLoopIndex + 1}/${locationData.length > 0 ? locationData.length : complaints.length} • Next in ${15}s`
                 : autoPlayTriggered 
                   ? `Vol: ${Math.round(calculateAutoPlayVolume(currentZoom) * 100)}% (Zoom ${currentZoom})`
                   : 'Environmental Audio Evidence'
