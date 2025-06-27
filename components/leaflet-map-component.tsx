@@ -176,9 +176,11 @@ export default function LeafletMapComponent({
   const [selectedLocation, setSelectedLocation] = useState<LocationData | null>(null)
   const [isSidebarOpen, setIsSidebarOpen] = useState(false)
   const [isLocationAudioPlaying, setIsLocationAudioPlaying] = useState(false)
+  const [autoPlayTriggered, setAutoPlayTriggered] = useState(false)
   const csvDataLoaderRef = useRef<CSVDataLoader | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const mapRef = useRef<L.Map | null>(null)
+  const nearestLocationRef = useRef<any>(null)
 
   // Load CSV data
   useEffect(() => {
@@ -202,8 +204,40 @@ export default function LeafletMapComponent({
     return Math.min(1.0, baseVolume * volumeMultiplier)
   }
 
+  // Calculate auto-play volume based on zoom level (starts at 30% when zoom >= 13)
+  const calculateAutoPlayVolume = (zoomLevel: number): number => {
+    if (zoomLevel < 13) return 0
+    
+    // Base volume is 30% when zoom = 13, increases with zoom
+    const baseVolume = 0.3
+    const zoomBonus = (zoomLevel - 13) * 0.05 // 5% increase per zoom level above 13
+    return Math.min(1.0, baseVolume + zoomBonus)
+  }
+
+  // Find nearest location to current map center
+  const findNearestLocation = () => {
+    if (!mapRef.current || locationData.length === 0) return null
+    
+    const center = mapRef.current.getCenter()
+    let nearestLocation = null
+    let minDistance = Infinity
+    
+    locationData.forEach(location => {
+      const distance = Math.sqrt(
+        Math.pow(center.lat - location.latitude, 2) + 
+        Math.pow(center.lng - location.longitude, 2)
+      )
+      if (distance < minDistance) {
+        minDistance = distance
+        nearestLocation = location
+      }
+    })
+    
+    return nearestLocation
+  }
+
   // Handle location-specific audio playback
-  const handleLocationAudioPlay = async (audioUrl: string) => {
+  const handleLocationAudioPlay = async (audioUrl: string, useAutoPlayVolume = false) => {
     if (!audioUrl || !audioEnabled) return
 
     try {
@@ -217,14 +251,18 @@ export default function LeafletMapComponent({
 
       // Create new audio element
       audioRef.current = new Audio(audioUrl)
-      audioRef.current.volume = calculateOptimizedVolume(audioVolume, currentZoom)
+      audioRef.current.volume = useAutoPlayVolume 
+        ? calculateAutoPlayVolume(currentZoom) 
+        : calculateOptimizedVolume(audioVolume, currentZoom)
       
       audioRef.current.onended = () => {
         setIsLocationAudioPlaying(false)
+        setAutoPlayTriggered(false)
       }
       
       audioRef.current.onerror = () => {
         setIsLocationAudioPlaying(false)
+        setAutoPlayTriggered(false)
         // Fallback to click sound
         playClickSound()
       }
@@ -233,7 +271,32 @@ export default function LeafletMapComponent({
     } catch (error) {
       console.error('Error playing location audio:', error)
       setIsLocationAudioPlaying(false)
+      setAutoPlayTriggered(false)
       playClickSound()
+    }
+  }
+
+  // Handle auto-play based on zoom level
+  const handleAutoPlay = (zoomLevel: number) => {
+    if (zoomLevel >= 13 && !autoPlayTriggered && !isLocationAudioPlaying) {
+      const nearestLocation = findNearestLocation()
+      if (nearestLocation && nearestLocation.audioUrl) {
+        nearestLocationRef.current = nearestLocation
+        setAutoPlayTriggered(true)
+        handleLocationAudioPlay(nearestLocation.audioUrl, true) // Use auto-play volume
+      }
+    } else if (zoomLevel < 13 && (autoPlayTriggered || isLocationAudioPlaying)) {
+      // Stop audio when zooming below level 13
+      if (audioRef.current) {
+        audioRef.current.pause()
+        audioRef.current.currentTime = 0
+      }
+      setIsLocationAudioPlaying(false)
+      setAutoPlayTriggered(false)
+      nearestLocationRef.current = null
+    } else if (zoomLevel >= 13 && autoPlayTriggered && audioRef.current && nearestLocationRef.current) {
+      // Update volume for auto-playing audio when zoom changes
+      audioRef.current.volume = calculateAutoPlayVolume(zoomLevel)
     }
   }
 
@@ -258,6 +321,8 @@ export default function LeafletMapComponent({
       audioRef.current.currentTime = 0
     }
     setIsLocationAudioPlaying(false)
+    setAutoPlayTriggered(false)
+    nearestLocationRef.current = null
   }
 
   // Handle map click to find nearest location
@@ -281,8 +346,11 @@ export default function LeafletMapComponent({
     onZoomChange(zoom)
     playZoomSound()
     
+    // Handle auto-play functionality based on zoom level
+    handleAutoPlay(zoom)
+    
     // Update volume for currently playing audio based on optimized zoom calculation
-    if (audioRef.current && isLocationAudioPlaying) {
+    if (audioRef.current && isLocationAudioPlaying && !autoPlayTriggered) {
       audioRef.current.volume = calculateOptimizedVolume(audioVolume, zoom)
     }
     
@@ -491,14 +559,27 @@ export default function LeafletMapComponent({
 
       {/* Audio Playing Indicator */}
       {isLocationAudioPlaying && (
-        <div className="absolute bottom-4 left-4 bg-gradient-to-r from-purple-600 via-pink-600 to-indigo-600 text-white px-6 py-4 rounded-xl shadow-2xl flex items-center space-x-4 animate-pulse border border-white/20 backdrop-blur-sm">
+        <div className={`absolute bottom-4 left-4 text-white px-6 py-4 rounded-xl shadow-2xl flex items-center space-x-4 animate-pulse border border-white/20 backdrop-blur-sm ${
+          autoPlayTriggered 
+            ? 'bg-gradient-to-r from-green-600 via-emerald-600 to-teal-600' 
+            : 'bg-gradient-to-r from-purple-600 via-pink-600 to-indigo-600'
+        }`}>
           <div className="relative">
-            <span className="text-2xl animate-bounce">🎵</span>
+            <span className="text-2xl animate-bounce">
+              {autoPlayTriggered ? '🔊' : '🎵'}
+            </span>
             <div className="absolute -top-1 -right-1 w-3 h-3 bg-green-400 rounded-full animate-ping"></div>
           </div>
           <div className="flex-1">
-            <div className="text-sm font-bold mb-1">Now Playing</div>
-            <div className="text-xs text-purple-100">Environmental Audio Evidence</div>
+            <div className="text-sm font-bold mb-1">
+              {autoPlayTriggered ? 'Auto-Playing' : 'Now Playing'}
+            </div>
+            <div className="text-xs opacity-90">
+              {autoPlayTriggered 
+                ? `Vol: ${Math.round(calculateAutoPlayVolume(currentZoom) * 100)}% (Zoom ${currentZoom})`
+                : 'Environmental Audio Evidence'
+              }
+            </div>
           </div>
           <div className="flex items-center space-x-2">
             <div className="flex space-x-1">
