@@ -177,10 +177,15 @@ export default function LeafletMapComponent({
   const [isSidebarOpen, setIsSidebarOpen] = useState(false)
   const [isLocationAudioPlaying, setIsLocationAudioPlaying] = useState(false)
   const [autoPlayTriggered, setAutoPlayTriggered] = useState(false)
+  const [autoLoopMode, setAutoLoopMode] = useState(false)
+  const [currentLoopIndex, setCurrentLoopIndex] = useState(0)
   const csvDataLoaderRef = useRef<CSVDataLoader | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const mapRef = useRef<L.Map | null>(null)
   const nearestLocationRef = useRef<any>(null)
+  const loopIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const randomOrderRef = useRef<number[]>([])
+  const isLoopingRef = useRef(false)
 
   // Load CSV data
   useEffect(() => {
@@ -190,6 +195,15 @@ export default function LeafletMapComponent({
       setLocationData(locations)
     }
     loadData()
+  }, [])
+
+  // Cleanup interval on component unmount
+  useEffect(() => {
+    return () => {
+      if (loopIntervalRef.current) {
+        clearInterval(loopIntervalRef.current)
+      }
+    }
   }, [])
 
   // Calculate optimized volume based on zoom level
@@ -234,6 +248,164 @@ export default function LeafletMapComponent({
     })
     
     return nearestLocation
+  }
+
+  // Generate random order for loop mode
+  const generateRandomOrder = () => {
+    const indices = Array.from({ length: locationData.length }, (_, i) => i)
+    for (let i = indices.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      ;[indices[i], indices[j]] = [indices[j], indices[i]]
+    }
+    return indices
+  }
+
+  // Fly to specific location
+  const flyToLocation = (location: any, zoomLevel = 15) => {
+    if (!mapRef.current) return
+    
+    mapRef.current.flyTo([location.latitude, location.longitude], zoomLevel, {
+      duration: 2, // 2 second flight duration
+      easeLinearity: 0.25
+    })
+  }
+
+  // Handle single loop iteration
+  const executeLoopIteration = () => {
+    // Use complaints data instead of locationData for better compatibility
+    const dataToUse = complaints.length > 0 ? complaints : locationData
+    
+    console.log('executeLoopIteration called', {
+      autoLoopMode,
+      dataLength: dataToUse.length,
+      mapExists: !!mapRef.current,
+      currentLoopIndex,
+      randomOrder: randomOrderRef.current
+    })
+    
+    if (!autoLoopMode || dataToUse.length === 0 || !mapRef.current) {
+      console.log('executeLoopIteration early return')
+      return
+    }
+
+    // Get current location from random order
+    const locationIndex = randomOrderRef.current[currentLoopIndex]
+    const location = dataToUse[locationIndex]
+    
+    console.log('Processing location:', location)
+    
+    if (location) {
+      // Fly to location
+      console.log('Flying to location:', location.latitude, location.longitude)
+      flyToLocation(location, 16) // Zoom level 16 for good detail
+      
+      // Update selected location and show sidebar
+      setSelectedLocation(location)
+      setIsSidebarOpen(true)
+      
+      // Play audio after a short delay to allow map to fly
+      if (location.audioUrl) {
+        setTimeout(() => {
+          if (autoLoopMode && location.audioUrl) {
+            console.log('Playing audio for location:', location.audioUrl)
+            handleLocationAudioPlay(location.audioUrl, false) // Use manual volume, not auto-play
+          }
+        }, 2500) // Wait for fly animation to complete
+      }
+      
+      // Move to next location index
+      const nextIndex = (currentLoopIndex + 1) % randomOrderRef.current.length
+      setCurrentLoopIndex(nextIndex)
+      
+      console.log('Moving to next index:', nextIndex)
+      
+      // If we've completed all locations, generate new random order
+      if (nextIndex === 0) {
+        console.log('Regenerating random order')
+        const indices = Array.from({ length: dataToUse.length }, (_, i) => i)
+        for (let i = indices.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1))
+          ;[indices[i], indices[j]] = [indices[j], indices[i]]
+        }
+        randomOrderRef.current = indices
+      }
+    } else {
+      console.log('No location found at index:', locationIndex)
+    }
+  }
+
+  // Start auto-loop mode
+  const startAutoLoop = () => {
+    // Use complaints data instead of locationData for better compatibility
+    const dataToUse = complaints.length > 0 ? complaints : locationData
+    
+    console.log('Starting auto-loop with data:', dataToUse.length, 'items')
+    console.log('Data:', dataToUse)
+    
+    if (dataToUse.length === 0) {
+      console.log('No data available for auto-loop')
+      return
+    }
+    
+    setAutoLoopMode(true)
+    isLoopingRef.current = true
+    
+    // Generate initial random order based on available data
+    const indices = Array.from({ length: dataToUse.length }, (_, i) => i)
+    for (let i = indices.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      ;[indices[i], indices[j]] = [indices[j], indices[i]]
+    }
+    randomOrderRef.current = indices
+    setCurrentLoopIndex(0)
+    
+    console.log('Random order generated:', randomOrderRef.current)
+    
+    // Execute first iteration immediately
+    executeLoopIteration()
+    
+    // Set up interval for subsequent iterations
+    loopIntervalRef.current = setInterval(() => {
+      if (isLoopingRef.current) {
+        console.log('Executing interval iteration')
+        executeLoopIteration()
+      }
+    }, 15000) // 15 second delay
+  }
+
+  // Stop auto-loop mode
+  const stopAutoLoop = () => {
+    setAutoLoopMode(false)
+    isLoopingRef.current = false
+    
+    if (loopIntervalRef.current) {
+      clearInterval(loopIntervalRef.current)
+      loopIntervalRef.current = null
+    }
+    
+    // Stop any playing audio
+    handleStopAllAudio()
+    
+    // Reset to initial map view
+    if (mapRef.current) {
+      mapRef.current.flyTo([14.0228637, 101.3021549], 9, {
+        duration: 2,
+        easeLinearity: 0.25
+      })
+    }
+    
+    // Close sidebar
+    setIsSidebarOpen(false)
+    setSelectedLocation(null)
+  }
+
+  // Toggle auto-loop mode
+  const toggleAutoLoop = () => {
+    if (autoLoopMode) {
+      stopAutoLoop()
+    } else {
+      startAutoLoop()
+    }
   }
 
   // Handle location-specific audio playback
@@ -378,7 +550,7 @@ export default function LeafletMapComponent({
   const thailandCenter: [number, number] = [14.0228637, 101.3021549]
 
   return (
-    <div className={`relative ${className}`}>
+    <div className={`relative w-full h-full ${className}`}>
       {/* Map Container */}
       <div 
         className={`w-full h-full min-h-[400px] md:min-h-[600px] rounded-lg overflow-hidden transition-all duration-300 ${
@@ -511,9 +683,9 @@ export default function LeafletMapComponent({
         )}
       </div>
 
-      {/* Audio Controls */}
-      <div className="absolute top-4 left-4 bg-white/95 backdrop-blur-sm rounded-xl px-4 py-3 shadow-xl border border-white/20">
-        <div className="text-sm font-semibold text-gray-800 mb-3 flex items-center">
+      {/* Audio Controls - Always Visible */}
+      <div className="absolute top-4 left-4 bg-white rounded-xl px-4 py-3 shadow-2xl border-2 border-blue-500 z-[1001] min-w-[280px] max-w-[320px]">
+        <div className="text-sm font-bold text-gray-900 mb-3 flex items-center">
           <span className="text-lg mr-2">🎛️</span>
           Audio Controls
         </div>
@@ -529,7 +701,7 @@ export default function LeafletMapComponent({
                 value={audioVolume}
                 onChange={(e) => setAudioVolume(parseFloat(e.target.value))}
                 className="w-full h-2 bg-gradient-to-r from-purple-200 to-purple-400 rounded-lg appearance-none cursor-pointer slider"
-                disabled={!audioEnabled}
+                disabled={!audioEnabled || autoLoopMode}
               />
               <div className="text-xs text-center text-gray-500 mt-1">
                 Volume: {Math.round(audioVolume * 100)}%
@@ -545,6 +717,32 @@ export default function LeafletMapComponent({
               {audioEnabled ? 'Active' : 'Off'}
             </span>
           </div>
+          
+          {/* Auto-Loop Toggle Button */}
+          <div className="pt-2 border-t border-gray-200">
+            <button
+              onClick={toggleAutoLoop}
+              disabled={!audioEnabled || (complaints.length === 0 && locationData.length === 0)}
+              className={`w-full flex items-center justify-center space-x-2 py-2 px-3 rounded-lg font-medium text-xs transition-all transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none ${
+                autoLoopMode
+                  ? 'bg-gradient-to-r from-orange-500 to-red-500 text-white shadow-lg'
+                  : 'bg-gradient-to-r from-blue-500 to-purple-500 text-white hover:from-blue-600 hover:to-purple-600 shadow-md'
+              }`}
+            >
+              <span className="text-sm">
+                {autoLoopMode ? '⏹️' : '🔄'}
+              </span>
+              <span>
+                {autoLoopMode ? 'Stop Auto-Tour' : 'Start Auto-Tour'}
+              </span>
+            </button>
+            {autoLoopMode && (
+              <div className="text-xs text-center text-gray-500 mt-1 animate-pulse">
+                Next location in {15 - (Date.now() % 15000) / 1000 | 0}s
+              </div>
+            )}
+          </div>
+          
           <div className="flex items-center justify-between text-xs pt-2 border-t border-gray-200">
             <span className="text-gray-700 font-medium flex items-center">
               <span className="mr-1">🏭</span>
@@ -558,26 +756,35 @@ export default function LeafletMapComponent({
       </div>
 
       {/* Audio Playing Indicator */}
-      {isLocationAudioPlaying && (
+      {(isLocationAudioPlaying || autoLoopMode) && (
         <div className={`absolute bottom-4 left-4 text-white px-6 py-4 rounded-xl shadow-2xl flex items-center space-x-4 animate-pulse border border-white/20 backdrop-blur-sm ${
-          autoPlayTriggered 
-            ? 'bg-gradient-to-r from-green-600 via-emerald-600 to-teal-600' 
-            : 'bg-gradient-to-r from-purple-600 via-pink-600 to-indigo-600'
+          autoLoopMode
+            ? 'bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600'
+            : autoPlayTriggered 
+              ? 'bg-gradient-to-r from-green-600 via-emerald-600 to-teal-600' 
+              : 'bg-gradient-to-r from-purple-600 via-pink-600 to-indigo-600'
         }`}>
           <div className="relative">
             <span className="text-2xl animate-bounce">
-              {autoPlayTriggered ? '🔊' : '🎵'}
+              {autoLoopMode ? '🚁' : autoPlayTriggered ? '🔊' : '🎵'}
             </span>
             <div className="absolute -top-1 -right-1 w-3 h-3 bg-green-400 rounded-full animate-ping"></div>
           </div>
           <div className="flex-1">
             <div className="text-sm font-bold mb-1">
-              {autoPlayTriggered ? 'Auto-Playing' : 'Now Playing'}
+              {autoLoopMode 
+                ? `Auto-Tour ${isLocationAudioPlaying ? '(Playing)' : '(Flying)'}`
+                : autoPlayTriggered 
+                  ? 'Auto-Playing' 
+                  : 'Now Playing'
+              }
             </div>
             <div className="text-xs opacity-90">
-              {autoPlayTriggered 
-                ? `Vol: ${Math.round(calculateAutoPlayVolume(currentZoom) * 100)}% (Zoom ${currentZoom})`
-                : 'Environmental Audio Evidence'
+              {autoLoopMode 
+                ? `Location ${currentLoopIndex + 1}/${complaints.length > 0 ? complaints.length : locationData.length} • Next in ${15}s`
+                : autoPlayTriggered 
+                  ? `Vol: ${Math.round(calculateAutoPlayVolume(currentZoom) * 100)}% (Zoom ${currentZoom})`
+                  : 'Environmental Audio Evidence'
               }
             </div>
           </div>
@@ -589,9 +796,9 @@ export default function LeafletMapComponent({
               <div className="w-1 h-5 bg-white/70 rounded-full animate-pulse" style={{ animationDelay: '0.3s' }}></div>
             </div>
             <button
-              onClick={handleStopAllAudio}
+              onClick={autoLoopMode ? toggleAutoLoop : handleStopAllAudio}
               className="text-white hover:text-red-300 p-2 rounded-full hover:bg-white/10 transition-all transform hover:scale-110"
-              title="Stop Audio"
+              title={autoLoopMode ? "Stop Auto-Tour" : "Stop Audio"}
             >
               ⏹️
             </button>
