@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Audio Test for Map</title>
+</head>
+<body>
+    <h1>Audio Test Files</h1>
+    <p>This page can be used to test audio functionality:</p>
+    
+    <h2>Generate Click Sound</h2>
+    <button onclick="generateClickSound()">Generate & Download Click Sound</button>
+    
+    <h2>Test Current Audio</h2>
+    <audio controls>
+        <source src="/audio/click.mp3" type="audio/mpeg">
+        Your browser does not support the audio element.
+    </audio>
+
+    <script>
+        function generateClickSound() {
+            // Create a simple click sound using Web Audio API
+            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const oscillator = audioContext.createOscillator();
+            const gainNode = audioContext.createGain();
+            
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+            
+            oscillator.frequency.setValueAtTime(800, audioContext.currentTime);
+            oscillator.frequency.exponentialRampToValueAtTime(200, audioContext.currentTime + 0.1);
+            
+            gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.1);
+            
+            oscillator.start();
+            oscillator.stop(audioContext.currentTime + 0.1);
+            
+            alert('Click sound played! The map will use Web Audio API if no audio file is found.');
+        }
+    </script>
+</body>
+</html>
